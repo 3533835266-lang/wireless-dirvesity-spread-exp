@@ -35,43 +35,37 @@ def _validate_branch_arrays(received, channel):
 def selection_combining(received, channel):
     """
     Selection combining for flat fading branches.
-
-    Parameters:
-        received: complex array with shape (num_branches, num_symbols).
-        channel: complex channel coefficients with the same shape.
-
-    Returns:
-        combined: one-dimensional equalized symbol estimates.
-
-    Requirement:
-        For each symbol, select the branch with the largest |h|^2 and divide
-        the selected received sample by its channel coefficient.
     """
     received, channel = _validate_branch_arrays(received, channel)
 
-    # TODO: choose the strongest branch per symbol and equalize by h.
-    raise NotImplementedError('请实现选择合并 SC')
+    # Find the index of the branch with the maximum channel power for each symbol
+    max_idx = np.argmax(np.abs(channel) ** 2, axis=0)
+    # Create an array of symbol indices
+    symbol_idx = np.arange(channel.shape[1])
+    # Select the received signal and channel coefficient for the strongest branch
+    best_r = received[max_idx, symbol_idx]
+    best_h = channel[max_idx, symbol_idx]
+    # Equalize by dividing the received signal by the channel coefficient
+    return best_r / best_h
 
 
 def maximal_ratio_combining(received, channel):
     """
     Maximal ratio combining for flat fading branches.
-
-    Returns:
-        combined = sum(conj(h_i) * r_i) / sum(|h_i|^2)
     """
     received, channel = _validate_branch_arrays(received, channel)
 
-    # TODO: use conjugate channel weights and normalize by total branch power.
-    raise NotImplementedError('请实现最大比合并 MRC')
+    # Multiply received signal by the complex conjugate of the channel
+    numerator = np.sum(np.conj(channel) * received, axis=0)
+    # Calculate the total channel power across all branches
+    denominator = np.sum(np.abs(channel) ** 2, axis=0)
+    # Return the normalized combined signal
+    return numerator / denominator
 
 
 def simulate_diversity_ber(snr_db_values, num_bits=4000, num_branches=2, seed=2026):
     """
     Simulate BER for no diversity, SC and MRC.
-
-    Returns:
-        dict with keys: '单分支', 'SC', 'MRC'. Each value is a list of BERs.
     """
     snr_db_values = np.asarray(snr_db_values, dtype=float)
     if snr_db_values.ndim != 1 or len(snr_db_values) == 0:
@@ -79,17 +73,47 @@ def simulate_diversity_ber(snr_db_values, num_bits=4000, num_branches=2, seed=20
     if num_bits <= 0 or num_branches < 2:
         raise ValueError('num_bits must be positive and num_branches must be at least 2')
 
-    # TODO: generate BPSK bits, simulate Rayleigh branches at each SNR,
-    # compare single-branch equalization, SC and MRC BER.
-    raise NotImplementedError('请实现分集 BER 仿真')
+    # Initialize dictionary to store BER results
+    ber_results = {'单分支': [], 'SC': [], 'MRC': []}
+
+    # Generate random bits and modulate to BPSK symbols
+    bits = generate_bits(num_bits, seed=seed)
+    symbols = bpsk_modulate(bits)
+
+    for snr in snr_db_values:
+        # Simulate Rayleigh fading branches for the current SNR
+        # Add SNR value to seed to ensure independent noise realizations across iterations
+        current_seed = seed + int(snr) if seed is not None else None
+        received, channel = rayleigh_fading_branches(symbols, num_branches, snr, current_seed)
+
+        # 1. Single-branch equalization (using the first branch as baseline)
+        single_rx = received[0] / channel[0]
+        single_ber = calculate_ber(bits, bpsk_demodulate(single_rx))
+        ber_results['单分支'].append(single_ber)
+
+        # 2. Selection Combining
+        sc_rx = selection_combining(received, channel)
+        sc_ber = calculate_ber(bits, bpsk_demodulate(sc_rx))
+        ber_results['SC'].append(sc_ber)
+
+        # 3. Maximal Ratio Combining
+        mrc_rx = maximal_ratio_combining(received, channel)
+        mrc_ber = calculate_ber(bits, bpsk_demodulate(mrc_rx))
+        ber_results['MRC'].append(mrc_ber)
+
+    return ber_results
 
 
 def equal_gain_combining(received, channel):
     """Optional: equal-gain combining with phase-only correction."""
     received, channel = _validate_branch_arrays(received, channel)
 
-    # TODO: 选做：请实现等增益合并 EGC。
-    raise NotImplementedError('选做：请实现等增益合并 EGC')
+    # Perform phase-only correction using conjugate channel normalized by its magnitude
+    phase_correction = np.conj(channel) / np.abs(channel)
+    # Sum the phase-corrected received signals across all branches
+    combined = np.sum(received * phase_correction, axis=0)
+    # Equal gain combining does not require amplitude scaling for BPSK hard decision
+    return combined
 
 
 def run_diversity_demo():

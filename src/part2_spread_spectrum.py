@@ -26,15 +26,6 @@ def _validate_pn_chips(pn_chips):
 def generate_m_sequence(register_state, taps, length=None):
     """
     Generate a bipolar m-sequence with an LFSR.
-
-    Convention:
-        register_state is listed from left to right.
-        taps are 1-based positions from left to right.
-        each clock outputs the rightmost bit, shifts right, and inserts feedback
-        at the left. The feedback bit is XOR of tapped bits.
-
-    Returns:
-        chips in bipolar form: bit 0 -> +1, bit 1 -> -1.
     """
     state = np.asarray(register_state, dtype=int)
     taps = list(taps)
@@ -49,40 +40,61 @@ def generate_m_sequence(register_state, taps, length=None):
     if length <= 0:
         raise ValueError('length must be positive')
 
-    # TODO: clock the LFSR and map output bits to bipolar chips.
-    raise NotImplementedError('请实现 m 序列生成')
+    state = state.copy()
+    chips = []
+
+    # Clock the LFSR for the desired sequence length
+    for _ in range(length):
+        # The output bit is the rightmost bit of the register
+        output_bit = state[-1]
+        # Map binary bit to bipolar chip: 0 -> +1, 1 -> -1
+        chips.append(1.0 if output_bit == 0 else -1.0)
+
+        # Calculate the feedback bit using XOR on the tapped positions (1-based index)
+        feedback = 0
+        for tap in taps:
+            feedback ^= state[tap - 1]
+
+        # Shift the register to the right and insert the feedback at the leftmost position
+        state = np.roll(state, 1)
+        state[0] = feedback
+
+    return np.array(chips)
 
 
 def dsss_spread(bits, pn_chips):
     """
     Spread BPSK symbols with PN chips.
-
-    For each bit, map 0 -> +1 and 1 -> -1, then multiply by the whole PN
-    sequence. Output length is len(bits) * len(pn_chips).
     """
     bits = np.asarray(bits, dtype=int)
     pn_chips = _validate_pn_chips(pn_chips)
     if bits.ndim != 1 or not np.all((bits == 0) | (bits == 1)):
         raise ValueError('bits must be a one-dimensional binary array')
 
-    # TODO: BPSK-map each bit and multiply by the PN chips.
-    raise NotImplementedError('请实现 DSSS 扩频')
+    # Map bits to BPSK symbols using the imported utility function
+    symbols = bpsk_modulate(bits)
+    # Multiply each BPSK symbol by the entire PN sequence using outer product
+    spread_signal = np.outer(symbols, pn_chips)
+    # Flatten the matrix into a 1D chip sequence
+    return spread_signal.flatten()
 
 
 def dsss_despread(received_chips, pn_chips):
     """
     Despread received chips by correlation with the same PN sequence.
-
-    Returns:
-        recovered bits after hard decision. Non-negative correlation -> bit 0.
     """
     received_chips = np.asarray(received_chips, dtype=float)
     pn_chips = _validate_pn_chips(pn_chips)
     if received_chips.ndim != 1 or len(received_chips) % len(pn_chips) != 0:
         raise ValueError('received_chips length must be a multiple of PN length')
 
-    # TODO: reshape by spreading factor, correlate with PN chips, and decide bits.
-    raise NotImplementedError('请实现 DSSS 解扩')
+    pn_len = len(pn_chips)
+    # Reshape the received chips into a matrix where each row represents one symbol period
+    matrix = received_chips.reshape(-1, pn_len)
+    # Correlate each row with the local PN sequence
+    correlation = matrix @ pn_chips
+    # Make hard decisions based on correlation polarity: positive -> 0, negative -> 1
+    return (correlation < 0).astype(int)
 
 
 def processing_gain_db(spreading_factor):
@@ -90,8 +102,8 @@ def processing_gain_db(spreading_factor):
     if spreading_factor <= 0:
         raise ValueError('spreading_factor must be positive')
 
-    # TODO: compute 10 * log10(N).
-    raise NotImplementedError('请实现处理增益计算')
+    # Calculate processing gain using the standard logarithmic formula
+    return 10.0 * np.log10(spreading_factor)
 
 
 def despread_with_timing_offset(received_chips, pn_chips, max_offset):
@@ -99,9 +111,35 @@ def despread_with_timing_offset(received_chips, pn_chips, max_offset):
     if max_offset < 0:
         raise ValueError('max_offset must be non-negative')
 
-    # TODO: 选做：请实现同步偏移搜索解扩。
-    raise NotImplementedError('选做：请实现同步偏移搜索')
+    pn_len = len(pn_chips)
+    best_offset = 0
+    max_corr_mag = -1
+    best_correlation = None
 
+    # Search for the best synchronization timing within the permitted offset range
+    for offset in range(max_offset + 1):
+        valid_len = len(received_chips) - offset
+        num_symbols = valid_len // pn_len
+        if num_symbols == 0:
+            continue
+
+        # Truncate the sequence based on current offset and expected symbol blocks
+        truncated_rx = received_chips[offset:offset + num_symbols * pn_len]
+        matrix = truncated_rx.reshape(-1, pn_len)
+        correlation = matrix @ pn_chips
+
+        # Evaluate synchronization quality using the average correlation magnitude
+        mean_corr_mag = np.mean(np.abs(correlation))
+        if mean_corr_mag > max_corr_mag:
+            max_corr_mag = mean_corr_mag
+            best_offset = offset
+            best_correlation = correlation
+
+    if best_correlation is None:
+        return np.array([])
+
+    # Demodulate based on the correlation vector of the optimal timing offset
+    return (best_correlation < 0).astype(int)
 
 def _correlation_values(received_chips, pn_chips):
     matrix = np.asarray(received_chips, dtype=float).reshape(-1, len(pn_chips))
